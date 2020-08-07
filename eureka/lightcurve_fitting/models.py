@@ -17,6 +17,7 @@ from bokeh.plotting import figure, show
 import numpy as np
 
 from .parameters import Parameters
+from .observations import Observations
 from .utils import COLORS
 from .limb_darkening_fit import ld_profile
 
