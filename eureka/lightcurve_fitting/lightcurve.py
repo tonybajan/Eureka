@@ -88,6 +88,20 @@ class LightCurve(Model):
 
         # Place to save the fit results
         self.results = []
+    
+    def metadata(self):
+        """
+        Store metadata related to the observation 
+
+        Parameters
+        ----------
+        nexposures: int
+           Number of total exposures 
+        nvisits: int
+            Number of unique visits (e.g. transit observations)
+        """
+        self.nexposures = None
+        self.nvisits = None
 
     def fit(self, model, fitter='lsq', **kwargs):
         """Fit the model to the lightcurve

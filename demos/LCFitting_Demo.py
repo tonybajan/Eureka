@@ -33,6 +33,10 @@ import eureka.lightcurve_fitting.lightcurve as lc
 reload(lc)
 wasp107b_lc = lc.LightCurve(wasp107b_time, wasp107b_flux[0], unc=wasp107b_unc[0], name='WASP-107b')
 
+#add metadata about the observation
+wasp107b_lc.nexposures = npts
+wasp107b_lc.nvisits = 1
+
 # Set the intial parameters
 import eureka.lightcurve_fitting.parameters as p
 reload(p)
