@@ -39,4 +39,3 @@ topdir          /home/User
 # Directories relative to project dir
 inputdir        /Data/TargetName/WFC3/Stage4    # The folder containing the outputs from Eureka!'s S4 pipeline (will be overwritten if calling S4 and S5 sequentially)
 outputdir       /Data/TargetName/WFC3/Stage5
-

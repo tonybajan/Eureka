@@ -1,7 +1,7 @@
 # Eureka! Control File for Stage 4: Generate Lightcurves
 
 # Number of spectroscopic channels spread evenly over given wavelength range
-nspecchan   10          # Number of spectroscopic channels
+nspecchan   1          # Number of spectroscopic channels
 wave_min    2.5         # Minimum wavelength
 wave_max    4.0         # Maximum wavelength
 allapers	True		# Run S4 on all of the apertures considered in S3? Otherwise will use newest output in the inputdir
@@ -30,8 +30,8 @@ hide_plots	True		# If True, plots will automatically be closed rather than poppi
 verbose		False		# If True, more details will be printed about steps in Stage 4
 
 # Project directory
-topdir      ../tests
+topdir      ./
 
 # Directories relative to project dir
-inputdir    /data/JWST-Sim/NIRCam/Stage3/	# The folder containing the outputs from Eureka!'s S3 or JWST's S3 pipeline (will be overwritten if calling S3 and S4 sequentially)
-outputdir	/data/JWST-Sim/NIRCam/Stage4/
+inputdir    data/JWST-Sim/NIRCam/Stage3/	# The folder containing the outputs from Eureka!'s S3 or JWST's S3 pipeline (will be overwritten if calling S3 and S4 sequentially)
+outputdir	data/JWST-Sim/NIRCam/Stage4/

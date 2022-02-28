@@ -1,5 +1,5 @@
 # Created by: Giannina Guzman-Caloca
-# Last Updated: 2021-02-18
+# Last Updated: 2021-02-27
 # Last Updated By: Yoni Brande
 
 
@@ -81,6 +81,7 @@ def test_NIRCam(capsys):
     s5_meta = s5.fitJWST(meta.eventlabel, ecf_path=ecf_path, s4_meta=s4_meta)
 
     # run assertions for S3
+    
     meta.outputdir_raw='data/JWST-Sim/NIRCam/Stage3/'
     name = pathdirectory(meta, 'S3', 1, ap=20, bg=20)
     assert os.path.exists(name)
@@ -131,25 +132,25 @@ def test_NIRSpec(capsys): # NOTE:: doesn't work, see issues in github (array mis
 
     
     # assert stage 2 outputs
-    meta.outputdir_raw='/data/JWST-Sim/NIRSpec/Stage2/'
+    meta.outputdir_raw='data/JWST-Sim/NIRSpec/Stage2/'
     name = pathdirectory(meta, 'S2', 1)
     assert os.path.exists(name)
     assert os.path.exists(name+'/figs')
     
     # assert stage 3 outputs
-    meta.outputdir_raw='/data/JWST-Sim/NIRSpec/Stage3/'
+    meta.outputdir_raw='data/JWST-Sim/NIRSpec/Stage3/'
     name = pathdirectory(meta, 'S3', 1, ap=8, bg=10)
     assert os.path.exists(name)
     assert os.path.exists(name+'/figs')
     
     # assert stage 4 outputs
-    meta.outputdir_raw='/data/JWST-Sim/NIRSpec/Stage4/'
+    meta.outputdir_raw='data/JWST-Sim/NIRSpec/Stage4/'
     name = pathdirectory(meta, 'S4', 1, ap=8, bg=10)
     assert os.path.exists(name)
     assert os.path.exists(name+'/figs')
     
     # assert stage 4 outputs
-    meta.outputdir_raw='/data/JWST-Sim/NIRSpec/Stage5/'
+    meta.outputdir_raw='data/JWST-Sim/NIRSpec/Stage5/'
     name = pathdirectory(meta, 'S5', 1, ap=8, bg=10)
     assert os.path.exists(name)
     assert os.path.exists(name+'/figs')
@@ -159,7 +160,8 @@ def test_NIRSpec(capsys): # NOTE:: doesn't work, see issues in github (array mis
     os.system("rm -r data/JWST-Sim/NIRSpec/Stage3/*")
     os.system("rm -r data/JWST-Sim/NIRSpec/Stage4/*")
     os.system("rm -r data/JWST-Sim/NIRSpec/Stage5/*")
-    
+
+
 '''
 def test_MIRI(capsys): # NOTE:: still not implemented
 
