@@ -30,9 +30,9 @@ hide_plots	True		# If True, plots will automatically be closed rather than poppi
 verbose		True		# If True, more details will be printed about steps in Stage 4
 
 # Project directory
-topdir     ../tests
+topdir     ./
 
 # Directories relative to project dir
-inputdir     /data/JWST-Sim/NIRSpec/Stage3/
-outputdir	 /data/JWST-Sim/NIRSpec/Stage4/
+inputdir     data/JWST-Sim/NIRSpec/Stage3/
+outputdir	 data/JWST-Sim/NIRSpec/Stage4/
 
