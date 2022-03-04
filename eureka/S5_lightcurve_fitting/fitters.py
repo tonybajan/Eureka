@@ -3,20 +3,19 @@ import copy
 from io import StringIO
 import sys
 
+from scipy.optimize import minimize
 import lmfit
 import emcee
 
 from dynesty import NestedSampler
 from dynesty.utils import resample_equal
 
-from ..lib import lsq
 from .parameters import Parameters
-from .likelihood import computeRedChiSq, lnprob, ptform
+from .likelihood import computeRedChiSq, lnprob, ln_like, ptform
 from . import plots_s5 as plots
 
 #FINDME: Keep reload statements for easy testing
 from importlib import reload
-reload(lsq)
 reload(plots)
 
 def lsqfitter(lc, model, meta, log, calling_function='lsq', **kwargs):
@@ -51,10 +50,18 @@ def lsqfitter(lc, model, meta, log, calling_function='lsq', **kwargs):
         Adding ability to do a single shared fit across all channels
     """
     # Group the different variable types
-    freenames, freepars, pmin, pmax, indep_vars = group_variables(model)
+    freenames, freepars, prior1, prior2, priortype, indep_vars = group_variables(model)
     
-    results = lsq.minimize(lc, model, freepars, pmin, pmax, freenames, indep_vars)
-    
+    neg_lnprob = lambda theta, lc, model, prior1, prior2, priortype, freenames: -lnprob(theta, lc, model, prior1, prior2, priortype, freenames)
+
+    if not hasattr(meta, 'lsq_method'):
+        log.writelog('No lsq optimization method specified - using Nelder-Mead by default.')
+        meta.lsq_method = 'Nelder-Mead'
+    if not hasattr(meta, 'lsq_tol'):
+        log.writelog('No lsq tolerance specified - using 1e-6 by default.')
+        meta.lsq_tol = 1e-6
+    results = minimize(neg_lnprob, freepars, args=(lc, model, prior1, prior2, priortype, freenames), method=meta.lsq_method, tol=meta.lsq_tol)
+
     if meta.run_verbose:
         log.writelog("\nVerbose lsq results: {}\n".format(results))
     else:
@@ -63,7 +70,10 @@ def lsqfitter(lc, model, meta, log, calling_function='lsq', **kwargs):
 
     # Get the best fit params
     fit_params = results.x
-    
+
+    # Save the fit ASAP
+    save_fit(meta, lc, calling_function, fit_params, freenames)
+
     # Make a new model instance
     best_model = copy.copy(model)
     best_model.components[0].update(fit_params, freenames)
@@ -73,11 +83,11 @@ def lsqfitter(lc, model, meta, log, calling_function='lsq', **kwargs):
     # Save the covariance matrix in case it's needed to estimate step size for a sampler
     model_lc = model.eval()
 
-    residuals = (lc.flux - model_lc)
     # FINDME
     # Commented out for now because op.least_squares() doesn't provide covariance matrix
     # Need to compute using Jacobian matrix instead (hess_inv = (J.T J)^{-1})
     # if results[1] is not None:
+    #     residuals = (lc.flux - model_lc)
     #     cov_mat = results[1]*np.var(residuals)
     # else:
     #     # Sometimes lsq will fail to converge and will return a None covariance matrix
@@ -102,10 +112,12 @@ def lsqfitter(lc, model, meta, log, calling_function='lsq', **kwargs):
         # This plot is only really useful if you're actually using the lsq fitter, otherwise don't make it
         plots.plot_rms(lc, model, meta, fitter=calling_function)
 
+    # Plot residuals distribution
+    if meta.isplots_S5 >= 3 and calling_function=='lsq':
+        plots.plot_res_distr(lc, model, meta, fitter=calling_function)
+
     best_model.__setattr__('chi2red',chi2red)
     best_model.__setattr__('fit_params',fit_params)
-
-    save_fit(meta, lc, calling_function, fit_params, freenames)
 
     return best_model
 
@@ -171,19 +183,29 @@ def emceefitter(lc, model, meta, log, **kwargs):
         Updated documentation. Reduced repeated code.
     - January 7-22, 2022 Megan Mansfield
         Adding ability to do a single shared fit across all channels
+    - February 23-25, 2022 Megan Mansfield
+        Added log-uniform and Gaussian priors.
     """
-    log.writelog('\nCalling lsqfitter first...')
-    lsq_sol = lsqfitter(lc, model, meta, log, calling_function='emcee_lsq', **kwargs)
+    if not hasattr(meta, 'lsq_first') or meta.lsq_first:
+        # Only call lsq fitter first if asked or lsq_first option wasn't passed (allowing backwards compatibility)
+        log.writelog('\nCalling lsqfitter first...')
+        # RUN LEAST SQUARES
+        lsq_sol = lsqfitter(lc, model, meta, log, calling_function='emcee_lsq', **kwargs)
 
-    # SCALE UNCERTAINTIES WITH REDUCED CHI2
-    if meta.rescale_err:
-        lc.unc *= np.sqrt(lsq_sol.chi2red)
+        # SCALE UNCERTAINTIES WITH REDUCED CHI2
+        if meta.rescale_err:
+            lc.unc *= np.sqrt(lsq_sol.chi2red)
+    else:
+        lsq_sol = None
     
     # Group the different variable types
-    freenames, freepars, pmin, pmax, indep_vars = group_variables(model)
+    freenames, freepars, prior1, prior2, priortype, indep_vars = group_variables(model)
     
-    if lsq_sol.cov_mat is not None:
+    if lsq_sol is not None and lsq_sol.cov_mat is not None:
         step_size = np.diag(lsq_sol.cov_mat)
+        ind_zero = np.where(step_size==0.)[0]
+        if len(ind_zero):
+            step_size[ind_zero] = 0.001*np.abs(freepars[ind_zero])
     else:
         # Sometimes the lsq fitter won't converge and will give None as the covariance matrix
         # In that case, we need to establish the step size in another way. A fractional step compared
@@ -193,16 +215,28 @@ def emceefitter(lc, model, meta, log, **kwargs):
         step_size = 0.001*np.abs(freepars)
     ndim = len(step_size)
     nwalkers = meta.run_nwalkers
-    run_nsteps = meta.run_nsteps
-    burn_in = meta.run_nburn
 
+    # make it robust to lsq hitting the upper or lower bound of the param space
+    ind_max = np.where(np.logical_and(freepars - prior2 == 0., priortype=='U'))
+    ind_min = np.where(np.logical_and(freepars - prior1 == 0., priortype=='U'))
+    pmid = (prior2+prior1)/2.
+    if len(ind_max[0]):
+        log.writelog('Warning: >=1 params hit the upper bound in the lsq fit. Setting to the middle of the interval.')
+        freepars[ind_max] = pmid[ind_max]
+    if len(ind_min[0]):
+        log.writelog('Warning: >=1 params hit the lower bound in the lsq fit. Setting to the middle of the interval.')
+        freepars[ind_min] = pmid[ind_min]
+    
     pos = np.array([freepars + np.array(step_size)*np.random.randn(ndim) for i in range(nwalkers)])
-    in_range = np.array([all((pmin <= ii) & (ii <= pmax)) for ii in pos])
-    if not np.all(in_range):
+    uniformprior=np.where(priortype=='U')
+    loguniformprior=np.where(priortype=='LU')
+    in_range = np.array([((prior1[uniformprior] <= ii) & (ii <= prior2[uniformprior])).all() for ii in pos[:,uniformprior]])
+    in_range2 = np.array([((prior1[loguniformprior] <= np.log(ii)) & (np.log(ii) <= prior2[loguniformprior])).all() for ii in pos[:,loguniformprior]])
+    if not (np.all(in_range))&(np.all(in_range2)):
         log.writelog('Not all walkers were initialized within the priors, using a smaller proposal distribution')
         pos = pos[in_range]
         # Make sure the step size is well within the limits
-        step_size_options = np.append(step_size.reshape(-1,1), np.abs(np.append((pmax-freepars).reshape(-1,1)/10, (freepars-pmin).reshape(-1,1)/10, axis=1)), axis=1)
+        step_size_options = np.append(step_size.reshape(-1,1), np.abs(np.append((prior2-freepars).reshape(-1,1)/10, (freepars-prior1).reshape(-1,1)/10, axis=1)), axis=1)
         step_size = np.min(step_size_options, axis=1)
         if pos.shape[0]==0:
             remove_zeroth = True
@@ -214,22 +248,21 @@ def emceefitter(lc, model, meta, log, **kwargs):
         pos = np.append(pos, np.array([freepars + np.array(step_size)*np.random.randn(ndim) for i in range(new_nwalkers)]).reshape(-1,ndim), axis=0)
         if remove_zeroth:
             pos = pos[1:]
-        in_range = np.array([all((pmin <= ii) & (ii <= pmax)) for ii in pos])
-    if not np.any(in_range):
+        in_range = np.array([((prior1[uniformprior] <= ii) & (ii <= prior2[uniformprior])).all() for ii in pos[:,uniformprior]])
+        in_range2 = np.array([((prior1[loguniformprior] <= np.log(ii)) & (np.log(ii) <= prior2[loguniformprior])).all() for ii in pos[:,loguniformprior]])
+    if not (np.any(in_range))&(np.any(in_range2)):
         raise AssertionError('Failed to initialize any walkers within the set bounds for all parameters!\n'+
                              'Check your stating position, decrease your step size, or increase the bounds on your parameters')
-    elif not np.all(in_range):
+    elif not (np.all(in_range))&(np.all(in_range2)):
         log.writelog('Warning: Failed to initialize all walkers within the set bounds for all parameters!')
         log.writelog('Using {} walkers instead of the initially requested {} walkers'.format(np.sum(in_range), nwalkers))
-        pos = pos[in_range]
+        pos = pos[in_range+in_range2]
         nwalkers = pos.shape[0]
 
     log.writelog('Running emcee...')
-    sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob, args=(lc, model, pmin, pmax, freenames))
-    sampler.run_mcmc(pos, run_nsteps, progress=True)
-    samples = sampler.chain[:, burn_in::1, :].reshape((-1, ndim))
-    if meta.isplots_S5 >= 5:
-        plots.plot_corner(samples, lc, meta, freenames, fitter='emcee')
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob, args=(lc, model, prior1, prior2, priortype, freenames))
+    sampler.run_mcmc(pos, meta.run_nsteps, progress=True)
+    samples = sampler.get_chain(flat=True, discard=meta.run_nburn)
 
     medians = []
     for i in range(len(step_size)):
@@ -237,11 +270,22 @@ def emceefitter(lc, model, meta, log, **kwargs):
             medians.append(q[1])
     fit_params = np.array(medians)
 
+    # Save the fit ASAP so plotting errors don't make you lose everything
+    save_fit(meta, lc, 'emcee', fit_params, freenames, samples)
+
+    if meta.isplots_S5 >= 5:
+        plots.plot_chain(sampler.get_chain(), lc, meta, freenames, fitter='emcee', full=True, nburn=meta.run_nburn)
+        plots.plot_chain(sampler.get_chain(discard=meta.run_nburn), lc, meta, freenames, fitter='emcee', full=False)
+        plots.plot_corner(samples, lc, meta, freenames, fitter='emcee')
+
     # Make a new model instance
     best_model = copy.copy(model)
     best_model.components[0].update(fit_params, freenames)
 
     model.update(fit_params, freenames)
+    if "scatter_ppm" in freenames:
+        ind = np.where(freenames == "scatter_ppm")
+        lc.unc_fit = medians[ind[0][0]]*1e-6
 
     # Plot fit
     if meta.isplots_S5 >= 1:
@@ -258,11 +302,13 @@ def emceefitter(lc, model, meta, log, **kwargs):
     # Plot Allan plot
     if meta.isplots_S5 >= 3:
         plots.plot_rms(lc, model, meta, fitter='emcee')
+        
+    # Plot residuals distribution
+    if meta.isplots_S5 >= 3:
+        plots.plot_res_distr(lc, model, meta, fitter='emcee')
 
     best_model.__setattr__('chi2red',chi2red)
     best_model.__setattr__('fit_params',fit_params)
-
-    save_fit(meta, lc, 'emcee', fit_params, freenames, samples)
 
     return best_model
 
@@ -295,17 +341,11 @@ def dynestyfitter(lc, model, meta, log, **kwargs):
         Updated documentation. Reduced repeated code.
     - January 7-22, 2022 Megan Mansfield
         Adding ability to do a single shared fit across all channels
+    - February 23-25, 2022 Megan Mansfield
+        Added log-uniform and Gaussian priors.
     """
-    log.writelog('\nCalling lsqfitter first...')
-    # RUN LEAST SQUARES
-    lsq_sol = lsqfitter(lc, model, meta, log, calling_function='dynesty_lsq', **kwargs)
-
-    # SCALE UNCERTAINTIES WITH REDUCED CHI2
-    if meta.rescale_err:
-        lc.unc *= np.sqrt(lsq_sol.chi2red)
-
     # Group the different variable types
-    freenames, freepars, pmin, pmax, indep_vars = group_variables(model)
+    freenames, freepars, prior1, prior2, priortype, indep_vars = group_variables(model)
 
     # DYNESTY
     nlive = meta.run_nlive # number of live points
@@ -315,12 +355,17 @@ def dynestyfitter(lc, model, meta, log, **kwargs):
     tol = meta.run_tol  # the stopping criterion
 
     # START DYNESTY
-    l_args = [lc, model, pmin, pmax, freenames]
+    l_args = [lc, model, freenames]
 
     log.writelog('Running dynesty...')
-    sampler = NestedSampler(lnprob, ptform, ndims,
+
+    min_nlive = int(np.ceil(ndims*(ndims+1)//2))
+    if nlive < min_nlive:
+        log.writelog(f'**** WARNING: You should set run_nlive to at least {min_nlive} ****')
+
+    sampler = NestedSampler(ln_like, ptform, ndims,
                             bound=bound, sample=sample, nlive=nlive, logl_args = l_args,
-                            ptform_args=[pmin, pmax])
+                            ptform_args=[prior1, prior2, priortype])
     sampler.run_nested(dlogz=tol, print_progress=True)  # output progress bar
     res = sampler.results  # get results dictionary from sampler
 
@@ -343,15 +388,18 @@ def dynestyfitter(lc, model, meta, log, **kwargs):
     if meta.run_verbose:
         log.writelog('Number of posterior samples is {}'.format(len(samples)))
 
+    medians = []
+    for i in range(len(freenames)):
+        q = np.percentile(samples[:, i], [16, 50, 84])
+        medians.append(q[1])
+    fit_params = np.array(medians)
+
+    # Save the fit ASAP so plotting errors don't make you lose everything
+    save_fit(meta, lc, 'dynesty', fit_params, freenames, samples)
+
     # plot using corner.py
     if meta.isplots_S5 >= 5:
         plots.plot_corner(samples, lc, meta, freenames, fitter='dynesty')
-
-    medians = []
-    for i in range(len(freenames)):
-            q = np.percentile(samples[:, i], [16, 50, 84])
-            medians.append(q[1])
-    fit_params = np.array(medians)
 
     # Make a new model instance
     best_model = copy.copy(model)
@@ -377,10 +425,12 @@ def dynestyfitter(lc, model, meta, log, **kwargs):
     if meta.isplots_S5 >= 3:
         plots.plot_rms(lc, model, meta, fitter='dynesty')
 
+    # Plot residuals distribution
+    if meta.isplots_S5 >= 3:
+        plots.plot_res_distr(lc, model, meta, fitter='dynesty')
+
     best_model.__setattr__('chi2red',chi2red)
     best_model.__setattr__('fit_params',fit_params)
-
-    save_fit(meta, lc, 'dynesty', fit_params, freenames, samples)
 
     return best_model
 
@@ -442,6 +492,9 @@ def lmfitter(lc, model, meta, log, **kwargs):
                    fit_params.get(i).vary, fit_params.get(i).min,
                    fit_params.get(i).max) for i in fit_params]
 
+    # Save the fit ASAP
+    save_fit(meta, lc, 'lmfitter', fit_params, freenames)
+
     # Create new model with best fit parameters
     params = Parameters()
     # Store each as an attribute
@@ -469,8 +522,6 @@ def lmfitter(lc, model, meta, log, **kwargs):
     best_model.__setattr__('chi2red',chi2red)
     best_model.__setattr__('fit_params',fit_params)
 
-    save_fit(meta, lc, 'lmfitter', fit_params, freenames)
-
     return best_model
 
 def group_variables(model):
@@ -487,10 +538,12 @@ def group_variables(model):
         The names of fitted variables.
     freepars: np.array
         The fitted variables.
-    pmin: np.array
-        The lower bound for constrained variables.
-    pmax: np.array
-        The upper bound for constrained variables.
+    prior1: np.array
+        The lower bound for constrained variables with uniform/log uniform priors, or mean for constrained variables with Gaussian priors.
+    prior2: np.array
+        The upper bound for constrained variables with uniform/log uniform priors, or mean for constrained variables with Gaussian priors.
+    priortype: np.array
+        Keywords indicating the type of prior for each free parameter.
     indep_vars: dict
         The frozen variables.
 
@@ -502,6 +555,8 @@ def group_variables(model):
         Moved code to separate function to reduce repeated code.
     - January 11, 2022 Megan Mansfield
         Added ability to have shared parameters
+    - February 23-25, 2022 Megan Mansfield
+        Added log-uniform and Gaussian priors.
     """
     all_params = []
     alreadylist = []
@@ -519,8 +574,9 @@ def group_variables(model):
     # Group the different variable types
     freenames = []
     freepars = []
-    pmin = []
-    pmax = []
+    prior1 = []
+    prior2 = []
+    priortype = []
     indep_vars = {}
     for ii, item in enumerate(all_params):
         name, param = item
@@ -528,20 +584,25 @@ def group_variables(model):
         if (param[1] == 'free') or (param[1] == 'shared'):
             freenames.append(name)
             freepars.append(param[0])
-            if len(param) > 3:
-                pmin.append(param[2])
-                pmax.append(param[3])
-            else:
-                pmin.append(-np.inf)
-                pmax.append(np.inf)
+            if len(param) == 5: #If prior is specified.
+                prior1.append(param[2])
+                prior2.append(param[3])
+                priortype.append(param[4])
+            elif (len(param) > 3) & (len(param) < 5): #If prior bounds are specified but not the prior type
+                raise IndexError("If you want to specify prior parameters, you must also specify the prior type: 'U', 'LU', or 'N'.")
+            else: #If no prior is specified, assume uniform prior with infinite bounds.
+                prior1.append(-np.inf)
+                prior2.append(np.inf)
+                priortype.append('U')
         elif param[1] == 'independent':
             indep_vars[name] = param[0]
     freenames = np.array(freenames)
     freepars = np.array(freepars)
-    pmin = np.array(pmin)
-    pmax = np.array(pmax)
+    prior1 = np.array(prior1)
+    prior2 = np.array(prior2)
+    priortype = np.array(priortype)
 
-    return freenames, freepars, pmin, pmax, indep_vars
+    return freenames, freepars, prior1, prior2, priortype, indep_vars
 
 def group_variables_lmfit(model):
     """Group variables into fitted and frozen for lmfit fitter.
@@ -598,7 +659,7 @@ def save_fit(meta, lc, fitter, fit_params, freenames, samples=[]):
 
     if len(samples)!=0:
         if lc.share:
-            fname = f'S5_{fitter}_samples.csv'
+            fname = f'S5_{fitter}_samples_shared.csv'
         else:
             fname = f'S5_{fitter}_samples_ch{lc.channel}.csv'
         np.savetxt(meta.outputdir+fname, samples, header=','.join(freenames), delimiter=',')
