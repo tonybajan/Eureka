@@ -3,6 +3,7 @@
 from astropy.io import fits
 import astraeus.xarrayIO as xrio
 from . import sigrej, background
+import numpy as np
 
 
 def read(filename, data, meta):
@@ -50,7 +51,10 @@ def read(filename, data, meta):
     err = hdulist['ERR', 1].data
     dq = hdulist['DQ', 1].data
     v0 = hdulist['VAR_RNOISE', 1].data
-    wave_2d = hdulist['WAVELENGTH', 1].data
+    if hdulist[0].header['CHANNEL'] == 'LONG':
+        wave_2d = hdulist['WAVELENGTH', 1].data
+    elif hdulist[0].header['CHANNEL'] == 'SHORT' and hdulist[0].header['FILTER'] == 'F210M':
+        data.wave = np.ones_like(sci[0]) * 2.1e4  # should have shape (#ypix, #xpix)
     int_times = hdulist['INT_TIMES', 1].data[data.attrs['intstart']-1:
                                              data.attrs['intend']]
 
@@ -74,6 +78,27 @@ def read(filename, data, meta):
     data['wave_2d'].attrs['wave_units'] = wave_units
 
     return data, meta
+
+
+def phot_arrays(data, meta):
+
+    data.x_centroid = np.zeros(meta.n_int)
+    data.y_centroid = np.zeros(meta.n_int)
+    data.sx_centroid = np.zeros(meta.n_int)
+    data.sy_centroid = np.zeros(meta.n_int)
+
+    data.aplev = np.zeros(meta.n_int)  # aperture flux
+    data.aperr = np.zeros(meta.n_int)  # aperture error
+    data.nappix = np.zeros(meta.n_int)  # number of aperture  pixels
+    data.skylev = np.zeros(meta.n_int)  # background sky flux level
+    data.skyerr = np.zeros(meta.n_int)  # sky error
+    data.nskypix = np.zeros(meta.n_int)  # number of sky pixels
+    data.nskyideal = np.zeros(meta.n_int)  # ideal number of sky pixels
+    data.status = np.zeros(meta.n_int)  # apphot return status
+    data.good = np.zeros(meta.n_int)  # good flag
+    data.betaper = np.zeros(meta.n_int)  # beta aperture
+
+    return data
 
 
 def flag_bg(data, meta):
@@ -142,3 +167,36 @@ def fit_bg(dataim, datamask, n, meta, isplots=0):
                                 isplots=isplots)
 
     return bg, mask, n
+
+
+def flag_bg_phot(data, meta):
+    '''Outlier rejection of sky background along time axis.
+
+    Parameters
+    ----------
+    data:   DataClass
+        The data object in which the fits data will stored
+    meta:   MetaClass
+        The metadata object
+
+    Returns
+    -------
+    data:   DataClass
+        The updated data object with outlier background pixels flagged.
+    '''
+    bg_thresh = meta.bg_thresh
+
+    data1 = data.subdata
+    mask1 = data.submask
+    err1 = np.median(data.suberr[:, :])
+    estsig1 = [err1 for j in range(len(bg_thresh))]
+
+    data.submask = sigrej.sigrej(data1, bg_thresh, mask1, estsig1)
+
+    npixels = np.prod(data.subdata.shape)
+    print('npixels:', npixels)
+    outliers = npixels - np.sum(data.submask)
+    print('outliers:', outliers)
+
+    return data
+

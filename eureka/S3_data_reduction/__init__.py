@@ -13,3 +13,5 @@ from . import s3_reduce
 from . import sigrej
 from . import source_pos
 from . import wfc3
+from . import eureka_badmask
+from . import eureka_chunkbad
