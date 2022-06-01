@@ -77,7 +77,7 @@ def read(filename, data, meta):
         if ('L168-9b' in data.attrs['filename']):
             time_i = 0
             nints = 11264
-            t_exp = 0.984192
+            t_exp = 0.984192/3600/24
             time_f = time_i + nints*t_exp
             time = np.linspace(time_i, time_f, nints,
                                endpoint=True)[data.attrs['intstart']-1:
