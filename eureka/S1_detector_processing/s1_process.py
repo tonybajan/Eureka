@@ -103,7 +103,7 @@ def rampfitJWST(eventlabel, ecf_path=None):
     # Save results
     if not meta.testing_S1:
         log.writelog('Saving Metadata')
-        me.saveevent(meta, meta.workdir+'S1_'+meta.eventlabel+"_Meta_Save",
+        me.saveevent(meta, meta.outputdir+'S1_'+meta.eventlabel+"_Meta_Save",
                      save=[])
 
     return meta
