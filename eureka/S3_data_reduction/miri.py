@@ -74,7 +74,15 @@ def read(filename, data, meta):
                   'currently hardcoded\n'
                   '           because they are not in the .fits files '
                   'themselves')
-        if ('WASP_80b' in data.attrs['filename']
+        if ('L168-9b' in data.attrs['filename']):
+            time_i = 0
+            nints = 11264
+            t_exp = 0.984192
+            time_f = time_i + nints*t_exp
+            time = np.linspace(time_i, time_f, nints,
+                               endpoint=True)[data.attrs['intstart']-1:
+                                              data.attrs['intend']-1]
+        elif ('WASP_80b' in data.attrs['filename']
                 and 'transit' in data.attrs['filename']):
             # Time array for WASP-80b MIRISIM transit observations
             # Assuming transit near August 1, 2022
