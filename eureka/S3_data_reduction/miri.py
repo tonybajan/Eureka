@@ -139,6 +139,11 @@ def read(filename, data, meta):
             raise AssertionError('Eureka does not currently know how to '
                                  'generate the time array for these'
                                  'simulations.')
+    elif 'jw01033005001_04103_00001' in data.attrs['filename']:
+        time = np.linspace(np.min(int_times['int_mid_BJD_TDB']),
+                           np.max(int_times['int_mid_BJD_TDB']),
+                           len(int_times['int_mid_BJD_TDB']),
+                           endpoint=True)
     else:
         time = int_times['int_mid_BJD_TDB']
 
